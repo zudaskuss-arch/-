@@ -18,13 +18,14 @@ const shuffle = (arr) => { const a = [...arr]; for (let i = a.length - 1; i > 0;
 const FORMAT_PROMPT = `아래 영어 단어/숙어 학습 자료(사진 또는 텍스트)를 정리해줘. 설명이나 다른 텍스트 없이, 아래 형식의 줄들만 자료에 나온 번호 순서대로 출력해줘.
 
 형식 (하나의 뜻마다 한 줄):
-영어단어|품사|한글뜻|유의어|콜로케이션패턴
+영어단어|품사|한글뜻|유의어|콜로케이션패턴|예문
 
 - 영어단어: 원형 그대로 (A, B, N, -ing, do 같은 자리표시자는 유지)
 - 품사: 명사/동사/형용사/부사/전치사/접속사/감탄사 중 하나, 표시 없으면 비워두기
 - 한글뜻: 그 품사/뜻의 한글 의미 (여러 뜻이면 콤마로 연결)
 - 유의어: "="로 연결된 동의/유사 표현이 있으면 쉼표(,)로 구분해서 적기, 없으면 비워두기
 - 콜로케이션패턴: 전치사/불변화사가 고정으로 붙는 패턴이 있으면 "템플릿>빈칸>패턴뜻" 형식으로 적기. 템플릿의 빈칸은 ___ 로 표시 (예: "object ___>to>~에 반대하다"). "object는 자동사라 뒤에 전치사가 무조건 온다" 같은 설명도 이 형식으로 바꿔줘. 패턴이 여러 개면 " && "로 이어붙이기. 없으면 비워두기
+- 예문: 자료에 그 뜻의 예문이 있으면 그대로 적기 (영어 문장, 없으면 만들지 말고 비워두기). "|" 문자는 예문에 쓰지 말기
 
 규칙:
 1. 같은 단어가 번호가 나뉘어 있거나 "/"로 이어져 있어도 여러 품사/뜻이면, 한 줄로 합치지 말고 뜻마다 줄을 따로 만들어줘 (영어단어는 그대로 반복)
@@ -34,29 +35,29 @@ const FORMAT_PROMPT = `아래 영어 단어/숙어 학습 자료(사진 또는 �
 예시:
 입력: "9. demand 동사) 요구하다 / 명사) 요구 (사항)"
 출력:
-demand|동사|요구하다||
-demand|명사|요구 (사항)||
+demand|동사|요구하다|||
+demand|명사|요구 (사항)|||
 
 입력: "20. consent 명사) 동의 / *consent to N ~에 동의" 그다음 "21. consent 동사) 동의하다, 승낙하다 / *consent to N ~에 동의하다"
 출력:
-consent|명사|동의||consent ___ N>to>~에 동의
-consent|동사|동의하다, 승낙하다||consent ___ N>to>~에 동의하다
+consent|명사|동의||consent ___ N>to>~에 동의|
+consent|동사|동의하다, 승낙하다||consent ___ N>to>~에 동의하다|
 
 입력: "5. increase considerably 상당히 증가하다 = increase significantly = increase substantially"
 출력:
-increase considerably|부사|상당히 증가하다|increase significantly,increase substantially|
+increase considerably|부사|상당히 증가하다|increase significantly,increase substantially||
 
 입력: "put A to use A를 활용하다 (전치사 자리에 반드시 to)"
 출력:
-put A to use|동사|A를 활용하다||put A ___ use>to>A를 활용하다
+put A to use|동사|A를 활용하다||put A ___ use>to>A를 활용하다|
 
-입력: "object 반대하다 (자동사라서 뒤에 항상 전치사 to가 붙음)"
+입력: "object 반대하다 (자동사라서 뒤에 항상 전치사 to가 붙음) 예문: He objects to the plan."
 출력:
-object|동사|반대하다||object ___>to>~에 반대하다
+object|동사|반대하다||object ___>to>~에 반대하다|He objects to the plan.
 
 이제 아래 자료를 이 형식으로 정리해줘 (사진을 올리거나 텍스트를 붙여넣어서 이어서 물어보세요):`;
 
-// Deterministic, non-AI parser for the "영어|품사|한글뜻|유의어|콜로케이션패턴" format.
+// Deterministic, non-AI parser for the "영어|품사|한글뜻|유의어|콜로케이션패턴|예문" format.
 // Users run FORMAT_PROMPT through their own AI (any chatbot) and paste the
 // result here — no API key or server call needed.
 function parsePatternField(raw) {
@@ -73,7 +74,7 @@ function parseFormattedText(text) {
   for (const raw of lines) {
     const line = raw.trim();
     if (!line || !line.includes("|")) continue;
-    const [englishRaw, posRaw = "", koreanRaw = "", synRaw = "", patternRaw = ""] = line.split("|");
+    const [englishRaw, posRaw = "", koreanRaw = "", synRaw = "", patternRaw = "", exampleRaw = ""] = line.split("|");
     const english = (englishRaw || "").trim();
     const korean = (koreanRaw || "").trim();
     if (!english || !korean) continue;
@@ -85,6 +86,7 @@ function parseFormattedText(text) {
       pos: POS_OPTIONS.includes(pos) ? pos : "",
       korean,
       synonyms,
+      example: (exampleRaw || "").trim(),
       patterns: parsePatternField(patternRaw),
     }));
   }
@@ -129,7 +131,7 @@ function speak(text) {
 }
 
 function makeSense(partial = {}) {
-  return { id: genId(), pos: "", korean: "", synonyms: [], patterns: [], ...partial };
+  return { id: genId(), pos: "", korean: "", synonyms: [], patterns: [], example: "", ...partial };
 }
 
 function migrateWord(w) {
@@ -139,12 +141,13 @@ function migrateWord(w) {
       senses: w.senses.map(s => makeSense({
         pos: s.pos || "", korean: s.korean || "", synonyms: s.synonyms || [],
         patterns: s.patterns || (s.pattern ? [s.pattern] : []),
+        example: s.example || "",
       })),
     };
   }
   return {
     id: w.id, english: w.english, group: w.group || "",
-    senses: [makeSense({ pos: w.pos || "", korean: w.korean || "", synonyms: w.synonyms || [], patterns: w.pattern ? [w.pattern] : [] })],
+    senses: [makeSense({ pos: w.pos || "", korean: w.korean || "", synonyms: w.synonyms || [], patterns: w.pattern ? [w.pattern] : [], example: w.example || "" })],
   };
 }
 
@@ -486,6 +489,7 @@ export default function VocabApp() {
         .sense-detail-kor{font-size:13.5px; font-weight:700; color:var(--ink);}
         .syn-chip{display:inline-block; background:var(--lavender-bg); color:var(--lavender-ink); padding:2px 9px; border-radius:20px; font-size:11px; margin:2px 4px 0 0; font-weight:700;}
         .pattern-line{font-size:11.5px; color:var(--ink); font-weight:600;}
+        .example-line{font-size:11.5px; color:var(--ink-soft); font-style:italic; margin-top:2px;}
         .blank-inline{color:var(--coral-ink); background:var(--coral-bg); padding:1px 6px; border-radius:6px; margin:0 2px; font-weight:900;}
         .pattern-line b{color:var(--red-ink);}
         .more-senses{color:var(--blue-ink); font-weight:700;}
@@ -507,6 +511,11 @@ export default function VocabApp() {
         .btn-danger{background:var(--red); color:#fff;}
         .btn:disabled{opacity:0.4; cursor:not-allowed;}
         .btn-full{width:100%;}
+        .btn-sm{padding:7px 12px; font-size:12.5px; border-radius:10px;}
+
+        .bulk-bar{display:flex; align-items:center; gap:6px; flex-wrap:wrap; background:var(--blue-bg); border:1.5px solid var(--blue); border-radius:12px; padding:8px 10px; margin-bottom:12px;}
+        .bulk-count{font-size:12px; font-weight:800; color:var(--blue-ink); margin-right:2px;}
+        .row-checkbox{width:16px; height:16px; flex-shrink:0; accent-color:var(--blue); cursor:pointer;}
 
         .submode-row{display:flex; gap:6px; margin-bottom:14px;}
         .submode-btn{flex:1; padding:10px; border-radius:12px; border:1.5px solid var(--line); background:var(--bg); color:var(--ink-soft); font-weight:800; font-size:12.5px; display:flex; align-items:center; justify-content:center; gap:6px;}
@@ -521,6 +530,8 @@ export default function VocabApp() {
         .format-prompt-box{min-height:110px; max-height:220px; font-family:ui-monospace, 'SF Mono', Consolas, monospace; font-size:11px; background:var(--card); color:var(--ink-soft); line-height:1.5;}
 
         .pending-card{background:var(--bg); border:1.5px solid var(--line); border-radius:14px; padding:10px; margin-bottom:10px;}
+        .insert-row-btn{width:100%; background:none; border:1.5px dashed var(--line); border-radius:10px; padding:5px; margin-bottom:10px; color:var(--ink-soft); font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center; gap:4px; opacity:0.7;}
+        .insert-row-btn:hover{opacity:1; border-color:var(--blue); color:var(--blue-ink); background:var(--blue-bg);}
         .pending-row-single{display:flex; gap:8px; margin-bottom:8px; align-items:center;}
         .pending-row-single input{flex:1; padding:9px 10px; border:1.5px solid var(--line); border-radius:9px; font-size:14px; font-weight:700;}
         .pending-row{display:grid; grid-template-columns:1fr 1fr auto auto; gap:6px; align-items:center;}
@@ -604,7 +615,7 @@ export default function VocabApp() {
           <div className="empty-state">불러오는 중...</div>
         ) : tab === "list" ? (
           <WordsTab words={words} groups={groups} groupCounts={groupCounts} wrongCounts={wrongCounts} wrongDetails={wrongDetails} wrongIds={wrongIds}
-            updateWord={updateWord} deleteWord={deleteWord} toggleFavorite={toggleFavorite} clearWrong={clearWrong}
+            updateWord={updateWord} deleteWord={deleteWord} toggleFavorite={toggleFavorite} clearWrong={clearWrong} showToast={showToast}
             addFolder={addFolder} renameFolder={renameFolder} deleteFolder={deleteFolder} folderPaths={folderPaths} folderColors={folderColors}
             onImport={(data) => { persist((data.words || []).map(migrateWord)); persistFolders(data.folderPaths || []); persistColors(data.folderColors || {}); persistWrongIds(data.wrongIds || []); persistWrongCounts(data.wrongCounts || {}); persistWrongDetails(data.wrongDetails || {}); showToast("백업 파일을 불러왔어요"); }} />
         ) : tab === "import" ? (
@@ -647,6 +658,7 @@ function SenseList({ senses }) {
               패턴: {p.template.split("___")[0]}<b>[{p.blank}]</b>{p.template.split("___")[1]} — {p.korean}
             </div>
           ))}
+          {s.example && <div className="example-line">"{s.example}"</div>}
         </div>
       ))}
     </div>
@@ -670,6 +682,8 @@ function SenseEditor({ sense, onChange, onRemove, canRemove }) {
       </div>
       <input className="sense-syn-input" value={(sense.synonyms || []).join(", ")} placeholder="유의어 (쉼표로 구분, 여러 개 가능)"
         onChange={e => set({ synonyms: e.target.value.split(",").map(s => s.trim()).filter(Boolean) })} />
+      <input className="sense-syn-input" value={sense.example || ""} placeholder="예문 (선택)"
+        onChange={e => set({ example: e.target.value })} />
       {(sense.patterns || []).map((p, idx) => (
         <div className="pattern-grid" key={idx} style={{ marginTop: 6 }}>
           <input value={p.template} placeholder="패턴 (consent ___ N)" onChange={e => updatePattern(idx, { template: e.target.value })} />
@@ -698,7 +712,7 @@ function MistakeBreakdown({ detail }) {
   );
 }
 
-function WordsTab({ words, groups, groupCounts, wrongCounts, wrongDetails, wrongIds, updateWord, deleteWord, toggleFavorite, clearWrong, addFolder, renameFolder, deleteFolder, folderPaths, folderColors, onImport }) {
+function WordsTab({ words, groups, groupCounts, wrongCounts, wrongDetails, wrongIds, updateWord, deleteWord, toggleFavorite, clearWrong, addFolder, renameFolder, deleteFolder, folderPaths, folderColors, onImport, showToast }) {
   const [subMode, setSubMode] = useState("list");
   return (
     <div>
@@ -707,7 +721,7 @@ function WordsTab({ words, groups, groupCounts, wrongCounts, wrongDetails, wrong
         <button className={`submode-btn ${subMode === "manage" ? "active" : ""}`} onClick={() => setSubMode("manage")}><Folder size={14} /> 묶음 관리</button>
       </div>
       {subMode === "list" ? (
-        <ListTab words={words} groups={groups} groupCounts={groupCounts} wrongCounts={wrongCounts} wrongDetails={wrongDetails} updateWord={updateWord} deleteWord={deleteWord} toggleFavorite={toggleFavorite} clearWrong={clearWrong} />
+        <ListTab words={words} groups={groups} groupCounts={groupCounts} wrongCounts={wrongCounts} wrongDetails={wrongDetails} updateWord={updateWord} deleteWord={deleteWord} toggleFavorite={toggleFavorite} clearWrong={clearWrong} addFolder={addFolder} showToast={showToast} />
       ) : (
         <ManageGroupsTab groups={groups} groupCounts={groupCounts} addFolder={addFolder} renameFolder={renameFolder} deleteFolder={deleteFolder}
           words={words} folderPaths={folderPaths} folderColors={folderColors} wrongIds={wrongIds} wrongCounts={wrongCounts} wrongDetails={wrongDetails} onImport={onImport} />
@@ -716,7 +730,7 @@ function WordsTab({ words, groups, groupCounts, wrongCounts, wrongDetails, wrong
   );
 }
 
-function ListTab({ words, groups, groupCounts, wrongCounts, wrongDetails, updateWord, deleteWord, toggleFavorite, clearWrong }) {
+function ListTab({ words, groups, groupCounts, wrongCounts, wrongDetails, updateWord, deleteWord, toggleFavorite, clearWrong, addFolder, showToast }) {
   const [q, setQ] = useState("");
   const [editingId, setEditingId] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
@@ -725,6 +739,24 @@ function ListTab({ words, groups, groupCounts, wrongCounts, wrongDetails, update
   const [treeExpanded, setTreeExpanded] = useState(new Set());
   const [wrongThreshold, setWrongThreshold] = useState(2);
   const [view, setView] = useState("list");
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [showMoveModal, setShowMoveModal] = useState(false);
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
+
+  const toggleSelected = (id) => setSelectedIds(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
+  const exitSelectMode = () => { setSelectMode(false); setSelectedIds(new Set()); setConfirmBulkDelete(false); };
+  const applyBulkMove = (path) => {
+    selectedIds.forEach(id => updateWord(id, { group: path }));
+    showToast && showToast(`${selectedIds.size}개 단어를 "${path || "미분류"}"로 옮겼어요`);
+    setShowMoveModal(false);
+    exitSelectMode();
+  };
+  const applyBulkDelete = () => {
+    selectedIds.forEach(id => deleteWord(id));
+    showToast && showToast(`${selectedIds.size}개 단어를 삭제했어요`);
+    exitSelectMode();
+  };
 
   const toggleTreeExpand = (p) => setTreeExpanded(prev => { const s = new Set(prev); s.has(p) ? s.delete(p) : s.add(p); return s; });
   const tree = buildTree(groups);
@@ -807,12 +839,39 @@ function ListTab({ words, groups, groupCounts, wrongCounts, wrongDetails, update
         )}
       </div>
 
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 8, flexWrap: "wrap" }}>
+        {view === "list" ? (
+          <button className={`chip ${selectMode ? "selected" : ""}`} onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}>
+            <CheckCircle2 size={13} /> {selectMode ? "선택 취소" : "선택"}
+          </button>
+        ) : <span />}
         <div className="view-toggle">
           <button className={view === "list" ? "active" : ""} onClick={() => setView("list")}><ListIcon size={13} /> 목록</button>
-          <button className={view === "card" ? "active" : ""} onClick={() => setView("card")}><LayoutGrid size={13} /> 카드</button>
+          <button className={view === "card" ? "active" : ""} onClick={() => { setView("card"); exitSelectMode(); }}><LayoutGrid size={13} /> 카드</button>
         </div>
       </div>
+
+      {selectMode && (
+        <div className="bulk-bar">
+          <span className="bulk-count">{selectedIds.size}개 선택됨</span>
+          <button className="chip" onClick={() => setSelectedIds(new Set(sortedFiltered.map(w => w.id)))}>전체 선택</button>
+          <button className="chip" onClick={() => setSelectedIds(new Set())}>선택 해제</button>
+          <div style={{ flex: 1 }} />
+          <button className="btn btn-outline btn-sm" disabled={selectedIds.size === 0} onClick={() => setShowMoveModal(true)}><Folder size={13} /> 폴더 이동</button>
+          {confirmBulkDelete ? (
+            <>
+              <button className="btn btn-danger btn-sm" onClick={applyBulkDelete}>삭제 확인</button>
+              <button className="btn btn-outline btn-sm" onClick={() => setConfirmBulkDelete(false)}>취소</button>
+            </>
+          ) : (
+            <button className="btn btn-outline btn-sm" disabled={selectedIds.size === 0} onClick={() => setConfirmBulkDelete(true)}><Trash2 size={13} /> 삭제</button>
+          )}
+        </div>
+      )}
+
+      {showMoveModal && (
+        <BulkMoveModal groups={groups} counts={groupCounts} onCreateFolder={addFolder} onConfirm={applyBulkMove} onClose={() => setShowMoveModal(false)} />
+      )}
 
       {words.length === 0 ? (
         <div className="empty-state">
@@ -831,6 +890,9 @@ function ListTab({ words, groups, groupCounts, wrongCounts, wrongDetails, update
             ) : (
               <div className="word-row" key={w.id}>
                 <div className="word-row-top">
+                  {selectMode && (
+                    <input type="checkbox" className="row-checkbox" checked={selectedIds.has(w.id)} onChange={() => toggleSelected(w.id)} aria-label="선택" />
+                  )}
                   <span className="row-number">{idx + 1}</span>
                   <button className="icon-btn star-btn" onClick={() => toggleFavorite(w.id)} aria-label="즐겨찾기">
                     <Star size={16} color="#E3A730" fill={w.favorite ? "#E3A730" : "none"} />
@@ -1041,6 +1103,56 @@ function FolderTreeRows({ nodes, depth, expanded, toggleExpand, isSelected, onTo
   ));
 }
 
+function BulkMoveModal({ groups, counts, onCreateFolder, onConfirm, onClose }) {
+  const [draft, setDraft] = useState("");
+  const [expanded, setExpanded] = useState(new Set());
+  const [adding, setAdding] = useState(false);
+  const [newName, setNewName] = useState("");
+  const toggleExpand = (path) => setExpanded(prev => { const s = new Set(prev); s.has(path) ? s.delete(path) : s.add(path); return s; });
+  const confirmAdd = () => {
+    const name = newName.trim().replace(/\//g, "");
+    if (!name) { setAdding(false); return; }
+    const fullPath = draft ? `${draft}/${name}` : name;
+    onCreateFolder && onCreateFolder(fullPath);
+    setDraft(fullPath);
+    setExpanded(prev => new Set([...prev, ...ancestorsOf(fullPath), draft].filter(Boolean)));
+    setNewName(""); setAdding(false);
+  };
+  const tree = buildTree(groups);
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-sheet" onClick={e => e.stopPropagation()}>
+        <div className="modal-title">이동할 묶음 선택</div>
+        <div className="modal-body">
+          <button className={`folder-row ${draft === "" ? "selected" : ""}`} onClick={() => setDraft("")}>
+            <span className="folder-chevron-spacer" />
+            <span className="folder-dot" style={{ background: "#B9C2CF" }} />
+            <span className="folder-name">미분류</span>
+            {draft === "" && <Check size={15} color="var(--blue-ink)" />}
+          </button>
+          <FolderTreeRows nodes={tree} depth={0} expanded={expanded} toggleExpand={toggleExpand} isSelected={p => p === draft} onToggle={setDraft} counts={counts} />
+        </div>
+
+        {adding ? (
+          <div className="folder-row folder-add-input" style={{ marginTop: 10 }}>
+            <input autoFocus value={newName} onChange={e => setNewName(e.target.value)} onKeyDown={e => { if (e.key === "Enter") confirmAdd(); }} placeholder="새 묶음 이름" />
+            <button className="icon-btn" onClick={confirmAdd} aria-label="추가"><Check size={15} color="var(--green-ink)" /></button>
+            <button className="icon-btn" onClick={() => { setAdding(false); setNewName(""); }} aria-label="취소"><X size={15} /></button>
+          </div>
+        ) : (
+          <div className="modal-footer">
+            <button className="modal-newfolder" onClick={() => setAdding(true)}><Plus size={14} /> 새 묶음 만들기</button>
+            <div className="right-btns">
+              <button className="btn btn-outline btn-sm" onClick={onClose}>취소</button>
+              <button className="btn btn-primary btn-sm" onClick={() => onConfirm(draft)}>이동</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function GroupPicker({ groups, value, onChange, counts = {}, onCreateFolder }) {
   const { colors } = useContext(FolderColorsContext);
   const [open, setOpen] = useState(false);
@@ -1180,6 +1292,14 @@ function AddTab({ addWords, showToast, groups, groupCounts, activeGroup, setActi
   );
 }
 
+function InsertRowButton({ onClick }) {
+  return (
+    <button type="button" className="insert-row-btn" onClick={onClick} aria-label="여기에 새 단어 추가">
+      <Plus size={12} /> 여기에 단어 추가
+    </button>
+  );
+}
+
 function PendingCard({ item, onChange, onRemove }) {
   const set = (patch) => onChange({ ...item, ...patch });
   const updateSense = (idx, next) => set({ senses: item.senses.map((s, i) => i === idx ? next : s) });
@@ -1229,13 +1349,21 @@ function ImportTab({ addWords, showToast, goList, groups, groupCounts, activeGro
 
   const updatePending = (id, next) => setPending(pending.map(p => p.id === id ? next : p));
   const removePending = (id) => setPending(pending.filter(p => p.id !== id));
-  const addRow = () => setPending([...pending, { id: genId(), english: "", group: "", senses: [makeSense()] }]);
+  const addRow = (atIndex) => {
+    const newItem = { id: genId(), english: "", group: "", senses: [makeSense()] };
+    setPending(prev => {
+      const idx = atIndex === undefined ? prev.length : atIndex;
+      const next = [...prev];
+      next.splice(idx, 0, newItem);
+      return next;
+    });
+  };
 
   const save = () => {
     const n = addWords(pending.map(p => ({ ...p, group: activeGroup })));
     if (n > 0) {
       showToast(`"${activeGroup || "미분류"}"에 ${n}개 단어를 추가했어요`);
-      setPending(null); setError(""); setPastedText(""); setFormattedText("");
+      setPending(null); setError(""); setFormattedText("");
       goList();
     } else {
       setError("저장할 단어가 없어요. 영어와 한글을 모두 입력해 주세요.");
@@ -1269,10 +1397,10 @@ function ImportTab({ addWords, showToast, goList, groups, groupCounts, activeGro
                 <button type="button" className="btn btn-outline" style={{ marginTop: 8 }} onClick={copyPrompt}>
                   <Sparkles size={14} /> {promptCopied ? "복사됐어요!" : "프롬프트 복사하기"}
                 </button>
-                <div className="field-hint" style={{ marginTop: 8 }}>형식: <code>영어단어|품사|한글뜻|유의어|콜로케이션패턴</code> — 한 줄에 하나씩</div>
+                <div className="field-hint" style={{ marginTop: 8 }}>형식: <code>영어단어|품사|한글뜻|유의어|콜로케이션패턴|예문</code> — 한 줄에 하나씩</div>
               </div>
               <textarea className="paste-area" value={formattedText} onChange={e => setFormattedText(e.target.value)}
-                placeholder={`consent|명사|동의||consent ___ N>to>~에 동의\nconsent|동사|동의하다, 승낙하다||consent ___ N>to>~에 동의하다\nincrease considerably|부사|상당히 증가하다|increase significantly,increase substantially|`} />
+                placeholder={`consent|명사|동의||consent ___ N>to>~에 동의|\nconsent|동사|동의하다, 승낙하다||consent ___ N>to>~에 동의하다|\nincrease considerably|부사|상당히 증가하다|increase significantly,increase substantially||`} />
               <button className="btn btn-primary btn-full" style={{ marginTop: 10 }} disabled={!formattedText.trim()} onClick={runFormatParse}>
                 <LayoutGrid size={16} /> 형식대로 가져오기
               </button>
@@ -1284,10 +1412,13 @@ function ImportTab({ addWords, showToast, goList, groups, groupCounts, activeGro
             <div>
               <div style={{ fontSize: 12.5, color: "var(--ink-soft)", marginBottom: 10, fontWeight: 600 }}>인식된 {pending.length}개 항목을 확인하고 필요하면 수정하세요. ("{activeGroup || "미분류"}" 묶음으로 저장돼요)</div>
               {error && <div style={{ color: "var(--red-ink)", fontSize: 12.5, marginBottom: 10, fontWeight: 600 }}>{error}</div>}
-              {pending.map(p => (
-                <PendingCard key={p.id} item={p} onChange={(next) => updatePending(p.id, next)} onRemove={() => removePending(p.id)} />
+              <InsertRowButton onClick={() => addRow(0)} />
+              {pending.map((p, idx) => (
+                <React.Fragment key={p.id}>
+                  <PendingCard item={p} onChange={(next) => updatePending(p.id, next)} onRemove={() => removePending(p.id)} />
+                  <InsertRowButton onClick={() => addRow(idx + 1)} />
+                </React.Fragment>
               ))}
-              <button className="btn btn-outline" style={{ marginBottom: 14 }} onClick={addRow}><Plus size={14} /> 항목 추가</button>
               <div style={{ display: "flex", gap: 8 }}>
                 <button className="btn btn-outline" onClick={() => { setPending(null); setError(""); }}>다시 시도</button>
                 <button className="btn btn-primary" style={{ flex: 1 }} onClick={save}><Check size={16} /> 단어장에 저장</button>
