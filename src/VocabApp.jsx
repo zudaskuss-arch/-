@@ -199,6 +199,12 @@ const buildTree = (paths) => {
   return root;
 };
 
+// FolderTreeRows/ManageFolderRows treat `expanded` as "paths whose children
+// render". Call sites store the opposite (a small "collapsedPaths" set) so
+// that folders default to expanded without needing to seed every path —
+// this derives the expanded set each render.
+const expandedFromCollapsed = (allPaths, collapsedPaths) => new Set(allPaths.filter(p => !collapsedPaths.has(p)));
+
 function PosBadge({ pos }) {
   if (!pos) return null;
   return <span className="pos-badge" style={{ background: (POS_COLORS[pos] || POS_COLORS[""]) + "22", color: POS_COLORS[pos] || POS_COLORS[""] }}>{pos}</span>;
@@ -371,6 +377,11 @@ export default function VocabApp() {
 
   const updateWord = (id, patch) => persist(words.map(w => w.id === id ? { ...w, ...patch } : w));
   const deleteWord = (id) => persist(words.filter(w => w.id !== id));
+  // Batched variants: apply to all ids in one pass so calling updateWord/deleteWord
+  // N times in a loop doesn't clobber itself (each call closes over the same
+  // pre-loop `words`, so only the last call's change would otherwise survive).
+  const bulkMoveWords = (ids, group) => persist(words.map(w => ids.has(w.id) ? { ...w, group } : w));
+  const bulkDeleteWords = (ids) => persist(words.filter(w => !ids.has(w.id)));
 
   return (
     <FolderColorsContext.Provider value={{ colors: folderColors, setColor: setFolderColor }}>
@@ -615,7 +626,7 @@ export default function VocabApp() {
           <div className="empty-state">불러오는 중...</div>
         ) : tab === "list" ? (
           <WordsTab words={words} groups={groups} groupCounts={groupCounts} wrongCounts={wrongCounts} wrongDetails={wrongDetails} wrongIds={wrongIds}
-            updateWord={updateWord} deleteWord={deleteWord} toggleFavorite={toggleFavorite} clearWrong={clearWrong} showToast={showToast}
+            updateWord={updateWord} deleteWord={deleteWord} bulkMoveWords={bulkMoveWords} bulkDeleteWords={bulkDeleteWords} toggleFavorite={toggleFavorite} clearWrong={clearWrong} showToast={showToast}
             addFolder={addFolder} renameFolder={renameFolder} deleteFolder={deleteFolder} folderPaths={folderPaths} folderColors={folderColors}
             onImport={(data) => { persist((data.words || []).map(migrateWord)); persistFolders(data.folderPaths || []); persistColors(data.folderColors || {}); persistWrongIds(data.wrongIds || []); persistWrongCounts(data.wrongCounts || {}); persistWrongDetails(data.wrongDetails || {}); showToast("백업 파일을 불러왔어요"); }} />
         ) : tab === "import" ? (
@@ -712,7 +723,7 @@ function MistakeBreakdown({ detail }) {
   );
 }
 
-function WordsTab({ words, groups, groupCounts, wrongCounts, wrongDetails, wrongIds, updateWord, deleteWord, toggleFavorite, clearWrong, addFolder, renameFolder, deleteFolder, folderPaths, folderColors, onImport, showToast }) {
+function WordsTab({ words, groups, groupCounts, wrongCounts, wrongDetails, wrongIds, updateWord, deleteWord, bulkMoveWords, bulkDeleteWords, toggleFavorite, clearWrong, addFolder, renameFolder, deleteFolder, folderPaths, folderColors, onImport, showToast }) {
   const [subMode, setSubMode] = useState("list");
   return (
     <div>
@@ -721,7 +732,7 @@ function WordsTab({ words, groups, groupCounts, wrongCounts, wrongDetails, wrong
         <button className={`submode-btn ${subMode === "manage" ? "active" : ""}`} onClick={() => setSubMode("manage")}><Folder size={14} /> 묶음 관리</button>
       </div>
       {subMode === "list" ? (
-        <ListTab words={words} groups={groups} groupCounts={groupCounts} wrongCounts={wrongCounts} wrongDetails={wrongDetails} updateWord={updateWord} deleteWord={deleteWord} toggleFavorite={toggleFavorite} clearWrong={clearWrong} addFolder={addFolder} showToast={showToast} />
+        <ListTab words={words} groups={groups} groupCounts={groupCounts} wrongCounts={wrongCounts} wrongDetails={wrongDetails} updateWord={updateWord} deleteWord={deleteWord} bulkMoveWords={bulkMoveWords} bulkDeleteWords={bulkDeleteWords} toggleFavorite={toggleFavorite} clearWrong={clearWrong} addFolder={addFolder} showToast={showToast} />
       ) : (
         <ManageGroupsTab groups={groups} groupCounts={groupCounts} addFolder={addFolder} renameFolder={renameFolder} deleteFolder={deleteFolder}
           words={words} folderPaths={folderPaths} folderColors={folderColors} wrongIds={wrongIds} wrongCounts={wrongCounts} wrongDetails={wrongDetails} onImport={onImport} />
@@ -730,7 +741,7 @@ function WordsTab({ words, groups, groupCounts, wrongCounts, wrongDetails, wrong
   );
 }
 
-function ListTab({ words, groups, groupCounts, wrongCounts, wrongDetails, updateWord, deleteWord, toggleFavorite, clearWrong, addFolder, showToast }) {
+function ListTab({ words, groups, groupCounts, wrongCounts, wrongDetails, updateWord, deleteWord, bulkMoveWords, bulkDeleteWords, toggleFavorite, clearWrong, addFolder, showToast }) {
   const [q, setQ] = useState("");
   const [editingId, setEditingId] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
@@ -747,13 +758,13 @@ function ListTab({ words, groups, groupCounts, wrongCounts, wrongDetails, update
   const toggleSelected = (id) => setSelectedIds(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
   const exitSelectMode = () => { setSelectMode(false); setSelectedIds(new Set()); setConfirmBulkDelete(false); };
   const applyBulkMove = (path) => {
-    selectedIds.forEach(id => updateWord(id, { group: path }));
+    bulkMoveWords(selectedIds, path);
     showToast && showToast(`${selectedIds.size}개 단어를 "${path || "미분류"}"로 옮겼어요`);
     setShowMoveModal(false);
     exitSelectMode();
   };
   const applyBulkDelete = () => {
-    selectedIds.forEach(id => deleteWord(id));
+    bulkDeleteWords(selectedIds);
     showToast && showToast(`${selectedIds.size}개 단어를 삭제했어요`);
     exitSelectMode();
   };
@@ -826,7 +837,7 @@ function ListTab({ words, groups, groupCounts, wrongCounts, wrongDetails, update
               {selectedFolder === "" && <Check size={15} color="var(--blue-ink)" />}
             </button>
           )}
-          <FolderTreeRows nodes={tree} depth={0} expanded={treeExpanded} toggleExpand={toggleTreeExpand} isSelected={p => p === selectedFolder} onToggle={setSelectedFolder} counts={groupCounts || {}} />
+          <FolderTreeRows nodes={tree} depth={0} expanded={expandedFromCollapsed(groups, treeExpanded)} toggleExpand={toggleTreeExpand} isSelected={p => p === selectedFolder} onToggle={setSelectedFolder} counts={groupCounts || {}} />
         </div>
         {selectedFolder === "__wrong__" && (
           <div className="chip-row" style={{ marginTop: 8 }}>
@@ -1036,7 +1047,7 @@ function CollocationTab({ words, groups }) {
                 {selectedFolder === "" && <Check size={15} color="var(--blue-ink)" />}
               </button>
             )}
-            <FolderTreeRows nodes={tree} depth={0} expanded={treeExpanded} toggleExpand={toggleTreeExpand} isSelected={p => p === selectedFolder} onToggle={setSelectedFolder} counts={collocCounts} />
+            <FolderTreeRows nodes={tree} depth={0} expanded={expandedFromCollapsed(groups, treeExpanded)} toggleExpand={toggleTreeExpand} isSelected={p => p === selectedFolder} onToggle={setSelectedFolder} counts={collocCounts} />
           </div>
         </div>
       )}
@@ -1115,7 +1126,6 @@ function BulkMoveModal({ groups, counts, onCreateFolder, onConfirm, onClose }) {
     const fullPath = draft ? `${draft}/${name}` : name;
     onCreateFolder && onCreateFolder(fullPath);
     setDraft(fullPath);
-    setExpanded(prev => new Set([...prev, ...ancestorsOf(fullPath), draft].filter(Boolean)));
     setNewName(""); setAdding(false);
   };
   const tree = buildTree(groups);
@@ -1130,7 +1140,7 @@ function BulkMoveModal({ groups, counts, onCreateFolder, onConfirm, onClose }) {
             <span className="folder-name">미분류</span>
             {draft === "" && <Check size={15} color="var(--blue-ink)" />}
           </button>
-          <FolderTreeRows nodes={tree} depth={0} expanded={expanded} toggleExpand={toggleExpand} isSelected={p => p === draft} onToggle={setDraft} counts={counts} />
+          <FolderTreeRows nodes={tree} depth={0} expanded={expandedFromCollapsed(groups, expanded)} toggleExpand={toggleExpand} isSelected={p => p === draft} onToggle={setDraft} counts={counts} />
         </div>
 
         {adding ? (
@@ -1163,7 +1173,7 @@ function GroupPicker({ groups, value, onChange, counts = {}, onCreateFolder }) {
 
   const openModal = () => {
     setDraft(value); setAdding(false); setNewName("");
-    setExpanded(new Set([...ancestorsOf(value), value].filter(Boolean)));
+    setExpanded(new Set()); // nothing collapsed — folders default to expanded
     setOpen(true);
   };
   const confirm = () => { onChange(draft); setOpen(false); };
@@ -1175,7 +1185,6 @@ function GroupPicker({ groups, value, onChange, counts = {}, onCreateFolder }) {
     const fullPath = draft ? `${draft}/${name}` : name;
     onCreateFolder && onCreateFolder(fullPath);
     setDraft(fullPath);
-    setExpanded(prev => new Set([...prev, ...ancestorsOf(fullPath), draft].filter(Boolean)));
     setNewName(""); setAdding(false);
   };
 
@@ -1203,7 +1212,7 @@ function GroupPicker({ groups, value, onChange, counts = {}, onCreateFolder }) {
                 <span className="folder-count">{counts[""] || 0}개</span>
                 {draft === "" && <Check size={15} color="var(--blue-ink)" />}
               </button>
-              <FolderTreeRows nodes={tree} depth={0} expanded={expanded} toggleExpand={toggleExpand} isSelected={p => p === draft} onToggle={setDraft} counts={counts} />
+              <FolderTreeRows nodes={tree} depth={0} expanded={expandedFromCollapsed(displayPaths, expanded)} toggleExpand={toggleExpand} isSelected={p => p === draft} onToggle={setDraft} counts={counts} />
             </div>
 
             {adding ? (
@@ -1518,7 +1527,6 @@ function ManageGroupsTab({ groups, groupCounts, addFolder, renameFolder, deleteF
   };
   const startAdd = (parentPath) => {
     setAddingUnder(parentPath); setNewName("");
-    if (parentPath) setExpanded(prev => new Set([...prev, parentPath]));
   };
   const confirmAddNew = () => {
     const name = newName.trim().replace(/\//g, "");
@@ -1565,7 +1573,7 @@ function ManageGroupsTab({ groups, groupCounts, addFolder, renameFolder, deleteF
         <div className="empty-state"><Folder size={34} /><div>아직 만든 묶음이 없어요.<br />아래 버튼으로 첫 묶음을 만들어보세요.</div></div>
       ) : (
         <div className="folder-list">
-          <ManageFolderRows nodes={tree} depth={0} expanded={expanded} toggleExpand={toggleExpand} counts={groupCounts}
+          <ManageFolderRows nodes={tree} depth={0} expanded={expandedFromCollapsed(groups, expanded)} toggleExpand={toggleExpand} counts={groupCounts}
             editingPath={editingPath} editValue={editValue} setEditValue={setEditValue}
             startRename={startRename} confirmRename={confirmRename} cancelRename={() => setEditingPath(null)}
             startAdd={startAdd} confirmDeletePath={confirmDeletePath} setConfirmDeletePath={setConfirmDeletePath} doDelete={doDelete}
@@ -1810,7 +1818,7 @@ function QuizTab({ words, groups, groupCounts, wrongCounts, markAnswer }) {
                 {groupFilter.includes(UNGROUPED) && <Check size={15} color="var(--blue-ink)" />}
               </button>
             )}
-            <FolderTreeRows nodes={tree} depth={0} expanded={treeExpanded} toggleExpand={toggleTreeExpand} isSelected={p => groupFilter.includes(p)} onToggle={toggleGroup} counts={groupCounts || {}} />
+            <FolderTreeRows nodes={tree} depth={0} expanded={expandedFromCollapsed(groups, treeExpanded)} toggleExpand={toggleTreeExpand} isSelected={p => groupFilter.includes(p)} onToggle={toggleGroup} counts={groupCounts || {}} />
           </div>
           {groupFilter.includes("__wrong__") && (
             <div className="chip-row" style={{ marginTop: 8 }}>
