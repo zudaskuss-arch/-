@@ -59,6 +59,48 @@ async function callParseAPI(promptText) {
   return parsed.map(normalizeParsedItem);
 }
 
+const FORMAT_PROMPT = `아래 영어 단어/숙어 목록을 정리해줘. 다른 설명 없이 아래 형식의 줄들만 출력해줘 (한 줄에 하나씩, | 로 구분).
+
+형식: 영어단어|품사|한글뜻|유의어(쉼표로 구분)
+- 품사는 명사/동사/형용사/부사/전치사/접속사/감탄사 중 하나, 없으면 비워두기
+- 유의어 없으면 비워두기
+- 같은 단어에 뜻이 여러 개면 줄을 여러 개로 나눠서 써줘
+
+예시 출력:
+consent|명사|동의|
+consent|동사|동의하다, 승낙하다|
+increase considerably|부사|상당히 증가하다|increase significantly,increase substantially
+
+정리할 목록:
+(여기에 원본 단어 목록 붙여넣기)`;
+
+// Deterministic, non-AI parser for the "영어|품사|한글뜻|유의어" format.
+// Users run FORMAT_PROMPT through their own AI (any chatbot) and paste the
+// result here — no API key or server call needed.
+function parseFormattedText(text) {
+  const lines = text.split(/\r?\n/);
+  const byKey = new Map();
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line || !line.includes("|")) continue;
+    const [englishRaw, posRaw = "", koreanRaw = "", synRaw = ""] = line.split("|");
+    const english = (englishRaw || "").trim();
+    const korean = (koreanRaw || "").trim();
+    if (!english || !korean) continue;
+    const pos = (posRaw || "").trim();
+    const synonyms = (synRaw || "").split(",").map(s => s.trim()).filter(Boolean);
+    const key = english.toLowerCase();
+    if (!byKey.has(key)) byKey.set(key, { id: genId(), english, group: "", senses: [] });
+    byKey.get(key).senses.push(makeSense({
+      pos: POS_OPTIONS.includes(pos) ? pos : "",
+      korean,
+      synonyms,
+      patterns: [],
+    }));
+  }
+  return [...byKey.values()];
+}
+
 function speak(text) {
   if (!text || !window.speechSynthesis) return;
   window.speechSynthesis.cancel();
@@ -476,6 +518,8 @@ export default function VocabApp() {
         .photo-drop:hover{border-color:var(--yellow);}
         .photo-preview{width:100%; max-height:260px; object-fit:contain; border-radius:12px; margin-bottom:12px; background:#111;}
         .paste-area{width:100%; min-height:140px; padding:12px; border:1.5px solid var(--line); border-radius:12px; font-size:13px; resize:vertical;}
+        .format-help{background:var(--bg); border:1.5px solid var(--line); border-radius:12px; padding:12px 14px; margin-bottom:12px; font-size:12.5px; color:var(--ink);}
+        .format-help code{background:var(--card); border:1px solid var(--line); border-radius:6px; padding:1px 6px; font-size:11.5px;}
 
         .pending-card{background:var(--bg); border:1.5px solid var(--line); border-radius:14px; padding:10px; margin-bottom:10px;}
         .pending-row-single{display:flex; gap:8px; margin-bottom:8px; align-items:center;}
@@ -1159,9 +1203,11 @@ function PendingCard({ item, onChange, onRemove }) {
 function ImportTab({ addWords, showToast, goList, groups, groupCounts, activeGroup, setActiveGroup, addFolder }) {
   const [subMode, setSubMode] = useState("text");
   const [pastedText, setPastedText] = useState("");
+  const [formattedText, setFormattedText] = useState("");
   const [parsing, setParsing] = useState(false);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(null);
+  const [promptCopied, setPromptCopied] = useState(false);
 
   const runParse = async () => {
     if (!pastedText.trim()) return;
@@ -1179,6 +1225,27 @@ function ImportTab({ addWords, showToast, goList, groups, groupCounts, activeGro
     }
   };
 
+  const runFormatParse = () => {
+    if (!formattedText.trim()) return;
+    setError("");
+    const items = parseFormattedText(formattedText);
+    if (items.length === 0) {
+      setError(`형식에 맞는 줄을 찾지 못했어요. "영어|품사|한글뜻|유의어" 형식인지 확인해주세요.`);
+      return;
+    }
+    setPending(items);
+  };
+
+  const copyPrompt = async () => {
+    try {
+      await navigator.clipboard.writeText(FORMAT_PROMPT);
+      setPromptCopied(true);
+      setTimeout(() => setPromptCopied(false), 1800);
+    } catch {
+      setError("클립보드 복사에 실패했어요. 아래 프롬프트를 직접 선택해서 복사해주세요.");
+    }
+  };
+
   const updatePending = (id, next) => setPending(pending.map(p => p.id === id ? next : p));
   const removePending = (id) => setPending(pending.filter(p => p.id !== id));
   const addRow = () => setPending([...pending, { id: genId(), english: "", group: "", senses: [makeSense()] }]);
@@ -1187,7 +1254,7 @@ function ImportTab({ addWords, showToast, goList, groups, groupCounts, activeGro
     const n = addWords(pending.map(p => ({ ...p, group: activeGroup })));
     if (n > 0) {
       showToast(`"${activeGroup || "미분류"}"에 ${n}개 단어를 추가했어요`);
-      setPending(null); setError(""); setPastedText("");
+      setPending(null); setError(""); setPastedText(""); setFormattedText("");
       goList();
     } else {
       setError("저장할 단어가 없어요. 영어와 한글을 모두 입력해 주세요.");
@@ -1201,7 +1268,8 @@ function ImportTab({ addWords, showToast, goList, groups, groupCounts, activeGro
 
       {!pending && (
         <div className="submode-row">
-          <button className={`submode-btn ${subMode === "text" ? "active" : ""}`} onClick={() => setSubMode("text")}><Type size={14} /> 텍스트</button>
+          <button className={`submode-btn ${subMode === "text" ? "active" : ""}`} onClick={() => setSubMode("text")}><Sparkles size={14} /> AI 텍스트</button>
+          <button className={`submode-btn ${subMode === "format" ? "active" : ""}`} onClick={() => setSubMode("format")}><LayoutGrid size={14} /> 형식 붙여넣기</button>
           <button className={`submode-btn ${subMode === "manual" ? "active" : ""}`} onClick={() => setSubMode("manual")}><Plus size={14} /> 직접 입력</button>
         </div>
       )}
@@ -1212,12 +1280,32 @@ function ImportTab({ addWords, showToast, goList, groups, groupCounts, activeGro
         <>
           <GroupPicker groups={groups} value={activeGroup} onChange={setActiveGroup} counts={groupCounts} onCreateFolder={addFolder} />
 
-          {!pending && (
+          {!pending && subMode === "text" && (
             <>
               <textarea className="paste-area" value={pastedText} onChange={e => setPastedText(e.target.value)}
                 placeholder={`클로드 앱에서 단어 목록을 "영어/한글/품사/유의어 정리해줘"라고 부탁한 뒤, 그 답변을 여기에 그대로 붙여넣으세요. 그냥 단어 목록만 붙여넣어도 괜찮아요.`} />
               <button className="btn btn-primary btn-full" style={{ marginTop: 10 }} disabled={parsing || !pastedText.trim()} onClick={runParse}>
                 <Sparkles size={16} /> {parsing ? "정리하는 중..." : "텍스트 인식하기"}
+              </button>
+              <div className="field-hint" style={{ marginTop: 8 }}>이 방식은 서버의 AI를 호출해요. API 키가 설정되어 있지 않다면 "형식 붙여넣기"를 이용해주세요.</div>
+              {error && <div style={{ color: "var(--red-ink)", fontSize: 12.5, marginTop: 10, fontWeight: 600 }}>{error}</div>}
+            </>
+          )}
+
+          {!pending && subMode === "format" && (
+            <>
+              <div className="format-help">
+                <div style={{ fontWeight: 800, marginBottom: 6 }}>AI 키 없이 가져오기</div>
+                <p style={{ margin: "0 0 8px" }}>사용하시는 AI(챗GPT, 클로드 앱 등)에게 아래 프롬프트로 정리해달라고 부탁한 뒤, 그 결과를 밑에 붙여넣으세요. 서버 호출 없이 바로 저장돼요.</p>
+                <button type="button" className="btn btn-outline" onClick={copyPrompt}>
+                  <Sparkles size={14} /> {promptCopied ? "복사됐어요!" : "프롬프트 복사하기"}
+                </button>
+                <div className="field-hint" style={{ marginTop: 8 }}>형식: <code>영어단어|품사|한글뜻|유의어(쉼표구분)</code> — 한 줄에 하나씩</div>
+              </div>
+              <textarea className="paste-area" value={formattedText} onChange={e => setFormattedText(e.target.value)}
+                placeholder={`consent|명사|동의|\nconsent|동사|동의하다, 승낙하다|\nincrease considerably|부사|상당히 증가하다|increase significantly,increase substantially`} />
+              <button className="btn btn-primary btn-full" style={{ marginTop: 10 }} disabled={!formattedText.trim()} onClick={runFormatParse}>
+                <LayoutGrid size={16} /> 형식대로 가져오기
               </button>
               {error && <div style={{ color: "var(--red-ink)", fontSize: 12.5, marginTop: 10, fontWeight: 600 }}>{error}</div>}
             </>
