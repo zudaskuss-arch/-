@@ -15,50 +15,6 @@ const hasCollocation = (w) => w.senses.some(s => (s.patterns || []).length > 0);
 const genId = () => `w_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 const shuffle = (arr) => { const a = [...arr]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1));[a[i], a[j]] = [a[j], a[i]]; } return a; };
 
-const PARSE_RULES = `다음 규칙을 따라 순수 JSON 배열로만 응답하세요. 마크다운 기호, 설명, 코드블록 없이 JSON 배열 텍스트만 출력하세요.
-
-각 항목 형식 (하나의 영어 headword당 하나의 항목):
-{"english": "...", "senses": [ {"pos": "...", "korean": "...", "synonyms": [...], "patterns": [{"template":"...", "blank":"...", "korean":"..."}]} ]}
-
-- english: 영어 단어/숙어 원형 (A, B, N, -ing, do 같은 자리표시자는 그대로 유지)
-- senses: 이 단어의 품사별 뜻 목록.
-  - pos: 명사/동사/형용사/부사/전치사/접속사/감탄사 중 하나, 표시 없으면 ""
-  - korean: 그 뜻 (여러 뜻은 콤마로 연결)
-  - synonyms: "=" 로 연결된 동의/유사 표현이 있으면 배열, 없으면 []
-  - patterns: 별표(*)나 "A to B:" 같은 콜론 형태로 제시된, 전치사/불변화사가 빈칸으로 뚜렷이 구분되는 패턴이 있으면 배열에 모두 담으세요. template은 빈칸을 ___ 로 표시(예: "consent ___ N"), blank는 빈칸에 들어갈 단어(예: "to"), korean은 그 패턴의 뜻. 없으면 []
-
-규칙:
-1. 같은 영어 단어(원형)가 번호가 나뉘어 있거나 "/"로 이어져 있거나 상관없이 여러 품사/뜻으로 나오면, 별개 항목으로 만들지 말고 하나의 항목으로 합쳐서 senses 배열에 각각 추가하세요.
-2. "=" 뒤에 이어지는 동의 표현들은 새 항목이 아니라 해당 sense의 synonyms 배열에 넣으세요.
-3. 별표(*)나 콜론(:) 예문/패턴은 새 항목을 만들지 말고 관련된 sense의 patterns 배열에 추가하세요.
-
-예시:
-입력: "9. demand 동사) 요구하다 / 명사) 요구 (사항)"
-출력 항목: {"english":"demand","senses":[{"pos":"동사","korean":"요구하다","synonyms":[],"patterns":[]},{"pos":"명사","korean":"요구 (사항)","synonyms":[],"patterns":[]}]}
-
-입력: "20. consent 명사) 동의 / *consent to N ~에 동의" 다음 번호 "21. consent 동사) 동의하다, 승낙하다 / *consent to N ~에 동의하다"
-출력 항목: {"english":"consent","senses":[{"pos":"명사","korean":"동의","synonyms":[],"patterns":[{"template":"consent ___ N","blank":"to","korean":"~에 동의"}]},{"pos":"동사","korean":"동의하다, 승낙하다","synonyms":[],"patterns":[{"template":"consent ___ N","blank":"to","korean":"~에 동의하다"}]}]}
-
-입력: "5. increase considerably 상당히 증가하다 = increase significantly = increase substantially"
-출력 항목: {"english":"increase considerably","senses":[{"pos":"","korean":"상당히 증가하다","synonyms":["increase significantly","increase substantially"],"patterns":[]}]}`;
-
-const INTRO_TEXT = `아래는 영어 단어/숙어 학습 목록 텍스트예요 (사람이나 다른 AI가 정리했을 수 있어요). 번호 목록, 표, 줄글 등 형식에 상관없이 각 항목에서 영어 표현과 한글 뜻을 최대한 정확히 파악해서 추출하세요.`;
-
-async function callParseAPI(promptText) {
-  const response = await fetch("/api/parse", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text: promptText }),
-  });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data?.error || `API 오류 (${response.status})`);
-  const textBlock = (data.content || []).find(b => b.type === "text");
-  if (!textBlock) throw new Error("응답에서 텍스트를 찾지 못했어요");
-  const parsed = extractJsonArray(textBlock.text);
-  if (!Array.isArray(parsed) || parsed.length === 0) throw new Error("항목을 찾지 못했어요");
-  return parsed.map(normalizeParsedItem);
-}
-
 const FORMAT_PROMPT = `아래 영어 단어/숙어 학습 자료(사진 또는 텍스트)를 정리해줘. 설명이나 다른 텍스트 없이, 아래 형식의 줄들만 자료에 나온 번호 순서대로 출력해줘.
 
 형식 (하나의 뜻마다 한 줄):
@@ -172,28 +128,8 @@ function speak(text) {
   window.speechSynthesis.speak(u);
 }
 
-function extractJsonArray(text) {
-  const cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
-  const start = cleaned.indexOf("[");
-  const end = cleaned.lastIndexOf("]");
-  if (start === -1 || end === -1 || end < start) throw new Error("응답에서 JSON을 찾지 못했어요");
-  return JSON.parse(cleaned.slice(start, end + 1));
-}
-
 function makeSense(partial = {}) {
   return { id: genId(), pos: "", korean: "", synonyms: [], patterns: [], ...partial };
-}
-
-function normalizeParsedItem(p) {
-  const senses = Array.isArray(p.senses) && p.senses.length > 0
-    ? p.senses.map(s => makeSense({
-      pos: POS_OPTIONS.includes(s.pos) ? s.pos : "",
-      korean: String(s.korean || "").trim(),
-      synonyms: Array.isArray(s.synonyms) ? s.synonyms.filter(Boolean).map(x => String(x).trim()) : [],
-      patterns: Array.isArray(s.patterns) ? s.patterns.filter(pt => pt && pt.template && pt.blank).map(pt => ({ template: String(pt.template).trim(), blank: String(pt.blank).trim(), korean: String(pt.korean || "").trim() })) : [],
-    }))
-    : [makeSense()];
-  return { id: genId(), english: String(p.english || "").trim(), group: "", senses };
 }
 
 function migrateWord(w) {
@@ -1264,29 +1200,11 @@ function PendingCard({ item, onChange, onRemove }) {
 }
 
 function ImportTab({ addWords, showToast, goList, groups, groupCounts, activeGroup, setActiveGroup, addFolder }) {
-  const [subMode, setSubMode] = useState("text");
-  const [pastedText, setPastedText] = useState("");
+  const [subMode, setSubMode] = useState("format");
   const [formattedText, setFormattedText] = useState("");
-  const [parsing, setParsing] = useState(false);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(null);
   const [promptCopied, setPromptCopied] = useState(false);
-
-  const runParse = async () => {
-    if (!pastedText.trim()) return;
-    setParsing(true); setError("");
-    try {
-      const promptText = `${INTRO_TEXT}\n\n${PARSE_RULES}\n\n다음은 정리할 텍스트예요:\n"""\n${pastedText}\n"""\n\n위 형식으로 추출해서 JSON 배열로만 응답하세요.`;
-      const items = await callParseAPI(promptText);
-      setPending(items);
-    } catch (e) {
-      console.error(e);
-      setError(`인식에 실패했어요 (${e.message || "알 수 없는 오류"}). 다시 시도하거나 아래에서 직접 입력해 주세요.`);
-      setPending([{ id: genId(), english: "", group: "", senses: [makeSense()] }]);
-    } finally {
-      setParsing(false);
-    }
-  };
 
   const runFormatParse = () => {
     if (!formattedText.trim()) return;
@@ -1331,8 +1249,7 @@ function ImportTab({ addWords, showToast, goList, groups, groupCounts, activeGro
 
       {!pending && (
         <div className="submode-row">
-          <button className={`submode-btn ${subMode === "text" ? "active" : ""}`} onClick={() => setSubMode("text")}><Sparkles size={14} /> AI 텍스트</button>
-          <button className={`submode-btn ${subMode === "format" ? "active" : ""}`} onClick={() => setSubMode("format")}><LayoutGrid size={14} /> 형식 붙여넣기</button>
+          <button className={`submode-btn ${subMode === "format" ? "active" : ""}`} onClick={() => setSubMode("format")}><Sparkles size={14} /> AI 텍스트</button>
           <button className={`submode-btn ${subMode === "manual" ? "active" : ""}`} onClick={() => setSubMode("manual")}><Plus size={14} /> 직접 입력</button>
         </div>
       )}
@@ -1343,23 +1260,11 @@ function ImportTab({ addWords, showToast, goList, groups, groupCounts, activeGro
         <>
           <GroupPicker groups={groups} value={activeGroup} onChange={setActiveGroup} counts={groupCounts} onCreateFolder={addFolder} />
 
-          {!pending && subMode === "text" && (
-            <>
-              <textarea className="paste-area" value={pastedText} onChange={e => setPastedText(e.target.value)}
-                placeholder={`클로드 앱에서 단어 목록을 "영어/한글/품사/유의어 정리해줘"라고 부탁한 뒤, 그 답변을 여기에 그대로 붙여넣으세요. 그냥 단어 목록만 붙여넣어도 괜찮아요.`} />
-              <button className="btn btn-primary btn-full" style={{ marginTop: 10 }} disabled={parsing || !pastedText.trim()} onClick={runParse}>
-                <Sparkles size={16} /> {parsing ? "정리하는 중..." : "텍스트 인식하기"}
-              </button>
-              <div className="field-hint" style={{ marginTop: 8 }}>이 방식은 서버의 AI를 호출해요. API 키가 설정되어 있지 않다면 "형식 붙여넣기"를 이용해주세요.</div>
-              {error && <div style={{ color: "var(--red-ink)", fontSize: 12.5, marginTop: 10, fontWeight: 600 }}>{error}</div>}
-            </>
-          )}
-
           {!pending && subMode === "format" && (
             <>
               <div className="format-help">
-                <div style={{ fontWeight: 800, marginBottom: 6 }}>AI 키 없이 가져오기</div>
-                <p style={{ margin: "0 0 8px" }}>단어장 사진(또는 텍스트)을 아무 AI 챗봇(클로드 앱, 챗GPT 등)에 올리고 아래 프롬프트를 이어서 붙여넣어 정리를 부탁하세요. 그 결과를 아래 칸에 붙여넣으면 서버 호출 없이 바로 저장돼요.</p>
+                <div style={{ fontWeight: 800, marginBottom: 6 }}>AI로 정리해서 가져오기</div>
+                <p style={{ margin: "0 0 8px" }}>단어장 사진(또는 텍스트)을 아무 AI 챗봇(클로드 앱, 챗GPT 등)에 올리고 아래 프롬프트를 이어서 붙여넣어 정리를 부탁하세요. 그 결과를 아래 칸에 붙여넣으면 바로 저장돼요.</p>
                 <textarea className="paste-area format-prompt-box" readOnly value={FORMAT_PROMPT} onFocus={e => e.target.select()} />
                 <button type="button" className="btn btn-outline" style={{ marginTop: 8 }} onClick={copyPrompt}>
                   <Sparkles size={14} /> {promptCopied ? "복사됐어요!" : "프롬프트 복사하기"}
