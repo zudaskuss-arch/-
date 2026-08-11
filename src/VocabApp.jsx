@@ -59,31 +59,65 @@ async function callParseAPI(promptText) {
   return parsed.map(normalizeParsedItem);
 }
 
-const FORMAT_PROMPT = `아래 영어 단어/숙어 목록을 정리해줘. 다른 설명 없이 아래 형식의 줄들만 출력해줘 (한 줄에 하나씩, | 로 구분).
+const FORMAT_PROMPT = `아래 영어 단어/숙어 학습 자료(사진 또는 텍스트)를 정리해줘. 설명이나 다른 텍스트 없이, 아래 형식의 줄들만 자료에 나온 번호 순서대로 출력해줘.
 
-형식: 영어단어|품사|한글뜻|유의어(쉼표로 구분)
-- 품사는 명사/동사/형용사/부사/전치사/접속사/감탄사 중 하나, 없으면 비워두기
-- 유의어 없으면 비워두기
-- 같은 단어에 뜻이 여러 개면 줄을 여러 개로 나눠서 써줘
+형식 (하나의 뜻마다 한 줄):
+영어단어|품사|한글뜻|유의어|콜로케이션패턴
 
-예시 출력:
-consent|명사|동의|
-consent|동사|동의하다, 승낙하다|
-increase considerably|부사|상당히 증가하다|increase significantly,increase substantially
+- 영어단어: 원형 그대로 (A, B, N, -ing, do 같은 자리표시자는 유지)
+- 품사: 명사/동사/형용사/부사/전치사/접속사/감탄사 중 하나, 표시 없으면 비워두기
+- 한글뜻: 그 품사/뜻의 한글 의미 (여러 뜻이면 콤마로 연결)
+- 유의어: "="로 연결된 동의/유사 표현이 있으면 쉼표(,)로 구분해서 적기, 없으면 비워두기
+- 콜로케이션패턴: 전치사/불변화사가 고정으로 붙는 패턴이 있으면 "템플릿>빈칸>패턴뜻" 형식으로 적기. 템플릿의 빈칸은 ___ 로 표시 (예: "object ___>to>~에 반대하다"). "object는 자동사라 뒤에 전치사가 무조건 온다" 같은 설명도 이 형식으로 바꿔줘. 패턴이 여러 개면 " && "로 이어붙이기. 없으면 비워두기
 
-정리할 목록:
-(여기에 원본 단어 목록 붙여넣기)`;
+규칙:
+1. 같은 단어가 번호가 나뉘어 있거나 "/"로 이어져 있어도 여러 품사/뜻이면, 한 줄로 합치지 말고 뜻마다 줄을 따로 만들어줘 (영어단어는 그대로 반복)
+2. "=" 뒤에 오는 동의 표현은 새 줄이 아니라 해당 뜻의 유의어 칸에 넣기
+3. 별표(*)나 콜론(:)으로 제시된 전치사/불변화사 패턴, 또는 문법 설명(자동사라 전치사가 온다 등)은 새 줄이 아니라 해당 뜻의 콜로케이션패턴 칸에 넣기
 
-// Deterministic, non-AI parser for the "영어|품사|한글뜻|유의어" format.
+예시:
+입력: "9. demand 동사) 요구하다 / 명사) 요구 (사항)"
+출력:
+demand|동사|요구하다||
+demand|명사|요구 (사항)||
+
+입력: "20. consent 명사) 동의 / *consent to N ~에 동의" 그다음 "21. consent 동사) 동의하다, 승낙하다 / *consent to N ~에 동의하다"
+출력:
+consent|명사|동의||consent ___ N>to>~에 동의
+consent|동사|동의하다, 승낙하다||consent ___ N>to>~에 동의하다
+
+입력: "5. increase considerably 상당히 증가하다 = increase significantly = increase substantially"
+출력:
+increase considerably|부사|상당히 증가하다|increase significantly,increase substantially|
+
+입력: "put A to use A를 활용하다 (전치사 자리에 반드시 to)"
+출력:
+put A to use|동사|A를 활용하다||put A ___ use>to>A를 활용하다
+
+입력: "object 반대하다 (자동사라서 뒤에 항상 전치사 to가 붙음)"
+출력:
+object|동사|반대하다||object ___>to>~에 반대하다
+
+이제 아래 자료를 이 형식으로 정리해줘 (사진을 올리거나 텍스트를 붙여넣어서 이어서 물어보세요):`;
+
+// Deterministic, non-AI parser for the "영어|품사|한글뜻|유의어|콜로케이션패턴" format.
 // Users run FORMAT_PROMPT through their own AI (any chatbot) and paste the
 // result here — no API key or server call needed.
+function parsePatternField(raw) {
+  if (!raw || !raw.trim()) return [];
+  return raw.split("&&").map(chunk => {
+    const [template = "", blank = "", korean = ""] = chunk.split(">");
+    return { template: template.trim(), blank: blank.trim(), korean: korean.trim() };
+  }).filter(p => p.template && p.blank);
+}
+
 function parseFormattedText(text) {
   const lines = text.split(/\r?\n/);
   const byKey = new Map();
   for (const raw of lines) {
     const line = raw.trim();
     if (!line || !line.includes("|")) continue;
-    const [englishRaw, posRaw = "", koreanRaw = "", synRaw = ""] = line.split("|");
+    const [englishRaw, posRaw = "", koreanRaw = "", synRaw = "", patternRaw = ""] = line.split("|");
     const english = (englishRaw || "").trim();
     const korean = (koreanRaw || "").trim();
     if (!english || !korean) continue;
@@ -95,17 +129,45 @@ function parseFormattedText(text) {
       pos: POS_OPTIONS.includes(pos) ? pos : "",
       korean,
       synonyms,
-      patterns: [],
+      patterns: parsePatternField(patternRaw),
     }));
   }
   return [...byKey.values()];
+}
+
+let cachedVoices = [];
+function refreshVoices() {
+  if (typeof window === "undefined" || !window.speechSynthesis) return cachedVoices;
+  const voices = window.speechSynthesis.getVoices();
+  if (voices.length) cachedVoices = voices;
+  return cachedVoices;
+}
+if (typeof window !== "undefined" && window.speechSynthesis) {
+  refreshVoices();
+  window.speechSynthesis.onvoiceschanged = refreshVoices;
+}
+
+// Voice lists differ a lot by browser/OS; the true system default is often a
+// low-quality robotic voice, so prefer known-good English voices when present.
+const PREFERRED_VOICE_PATTERNS = [/Google US English/i, /Natural/i, /Online/i, /Samantha/i, /Aria/i, /Jenny/i, /Guy/i];
+function pickBestVoice() {
+  const voices = cachedVoices.length ? cachedVoices : refreshVoices();
+  if (!voices.length) return null;
+  const enVoices = voices.filter(v => (v.lang || "").toLowerCase().startsWith("en"));
+  const pool = enVoices.length ? enVoices : voices;
+  for (const pattern of PREFERRED_VOICE_PATTERNS) {
+    const match = pool.find(v => pattern.test(v.name));
+    if (match) return match;
+  }
+  return pool.find(v => (v.lang || "").toLowerCase() === "en-us") || pool[0];
 }
 
 function speak(text) {
   if (!text || !window.speechSynthesis) return;
   window.speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(text.replace(/___/g, "something"));
-  u.lang = "en-US";
+  const voice = pickBestVoice();
+  if (voice) { u.voice = voice; u.lang = voice.lang; } else { u.lang = "en-US"; }
   u.rate = 0.92;
   window.speechSynthesis.speak(u);
 }
@@ -520,6 +582,7 @@ export default function VocabApp() {
         .paste-area{width:100%; min-height:140px; padding:12px; border:1.5px solid var(--line); border-radius:12px; font-size:13px; resize:vertical;}
         .format-help{background:var(--bg); border:1.5px solid var(--line); border-radius:12px; padding:12px 14px; margin-bottom:12px; font-size:12.5px; color:var(--ink);}
         .format-help code{background:var(--card); border:1px solid var(--line); border-radius:6px; padding:1px 6px; font-size:11.5px;}
+        .format-prompt-box{min-height:110px; max-height:220px; font-family:ui-monospace, 'SF Mono', Consolas, monospace; font-size:11px; background:var(--card); color:var(--ink-soft); line-height:1.5;}
 
         .pending-card{background:var(--bg); border:1.5px solid var(--line); border-radius:14px; padding:10px; margin-bottom:10px;}
         .pending-row-single{display:flex; gap:8px; margin-bottom:8px; align-items:center;}
@@ -1296,14 +1359,15 @@ function ImportTab({ addWords, showToast, goList, groups, groupCounts, activeGro
             <>
               <div className="format-help">
                 <div style={{ fontWeight: 800, marginBottom: 6 }}>AI 키 없이 가져오기</div>
-                <p style={{ margin: "0 0 8px" }}>사용하시는 AI(챗GPT, 클로드 앱 등)에게 아래 프롬프트로 정리해달라고 부탁한 뒤, 그 결과를 밑에 붙여넣으세요. 서버 호출 없이 바로 저장돼요.</p>
-                <button type="button" className="btn btn-outline" onClick={copyPrompt}>
+                <p style={{ margin: "0 0 8px" }}>단어장 사진(또는 텍스트)을 아무 AI 챗봇(클로드 앱, 챗GPT 등)에 올리고 아래 프롬프트를 이어서 붙여넣어 정리를 부탁하세요. 그 결과를 아래 칸에 붙여넣으면 서버 호출 없이 바로 저장돼요.</p>
+                <textarea className="paste-area format-prompt-box" readOnly value={FORMAT_PROMPT} onFocus={e => e.target.select()} />
+                <button type="button" className="btn btn-outline" style={{ marginTop: 8 }} onClick={copyPrompt}>
                   <Sparkles size={14} /> {promptCopied ? "복사됐어요!" : "프롬프트 복사하기"}
                 </button>
-                <div className="field-hint" style={{ marginTop: 8 }}>형식: <code>영어단어|품사|한글뜻|유의어(쉼표구분)</code> — 한 줄에 하나씩</div>
+                <div className="field-hint" style={{ marginTop: 8 }}>형식: <code>영어단어|품사|한글뜻|유의어|콜로케이션패턴</code> — 한 줄에 하나씩</div>
               </div>
               <textarea className="paste-area" value={formattedText} onChange={e => setFormattedText(e.target.value)}
-                placeholder={`consent|명사|동의|\nconsent|동사|동의하다, 승낙하다|\nincrease considerably|부사|상당히 증가하다|increase significantly,increase substantially`} />
+                placeholder={`consent|명사|동의||consent ___ N>to>~에 동의\nconsent|동사|동의하다, 승낙하다||consent ___ N>to>~에 동의하다\nincrease considerably|부사|상당히 증가하다|increase significantly,increase substantially|`} />
               <button className="btn btn-primary btn-full" style={{ marginTop: 10 }} disabled={!formattedText.trim()} onClick={runFormatParse}>
                 <LayoutGrid size={16} /> 형식대로 가져오기
               </button>
