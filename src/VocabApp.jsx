@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo, useContext, createContext } from "react";
-import { Type, Plus, Volume2, BookOpen, Layers, CheckCircle2, XCircle, Trash2, Pencil, RotateCcw, Sparkles, Search, ChevronRight, ChevronLeft, ChevronDown, X, Check, LayoutGrid, List as ListIcon, Folder, Star, Link2, LogOut } from "lucide-react";
+import { Type, Plus, Volume2, BookOpen, Layers, CheckCircle2, XCircle, Trash2, Pencil, RotateCcw, Sparkles, Search, ChevronRight, ChevronLeft, ChevronDown, X, Check, LayoutGrid, List as ListIcon, Folder, Star, Link2, LogOut, Stethoscope } from "lucide-react";
 import { supabase } from "./lib/supabaseClient";
 import { getItem, setItem } from "./lib/storage";
+import MedTermApp from "./MedTermApp";
 
 const POS_OPTIONS = ["명사", "동사", "형용사", "부사", "전치사", "접속사", "감탄사", "기타"];
 const POS_COLORS = {
@@ -12,8 +13,8 @@ const COMMON_PREPS = ["to", "for", "of", "with", "in", "on", "at", "from", "by",
 const UNGROUPED = "미분류";
 const hasCollocation = (w) => w.senses.some(s => (s.patterns || []).length > 0);
 
-const genId = () => `w_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-const shuffle = (arr) => { const a = [...arr]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1));[a[i], a[j]] = [a[j], a[i]]; } return a; };
+export const genId = () => `w_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+export const shuffle = (arr) => { const a = [...arr]; for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1));[a[i], a[j]] = [a[j], a[i]]; } return a; };
 
 const FORMAT_PROMPT = `아래 영어 단어/숙어 학습 자료(사진 또는 텍스트)를 정리해줘. 설명이나 다른 텍스트 없이, 아래 형식의 줄들만 자료에 나온 번호 순서대로 출력해줘.
 
@@ -120,7 +121,7 @@ function pickBestVoice() {
   return pool.find(v => (v.lang || "").toLowerCase() === "en-us") || pool[0];
 }
 
-function speak(text) {
+export function speak(text) {
   if (!text || !window.speechSynthesis) return;
   window.speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(text.replace(/___/g, "something"));
@@ -167,7 +168,7 @@ function buildSynonymBlank(word, sense) {
   return { prefix, suffix, accepted, korean: sense.korean };
 }
 
-const GROUP_PALETTE = [
+export const GROUP_PALETTE = [
   "#F2A6A0", "#F0846F", "#E8916B", "#F0B15E", "#F2C94C", "#F0D96A", "#D9C56F",
   "#C9AE97", "#D6A96B", "#B5872F", "#C97C64", "#C4699A", "#E89FC0", "#E8779E",
   "#B49EDB", "#8A72C4", "#C9A6E8", "#9C89D9", "#93A9CC", "#5F8598", "#4C7EB0",
@@ -175,17 +176,17 @@ const GROUP_PALETTE = [
   "#9AA0AC", "#8C8C80",
 ];
 const hashStr = (s) => { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return Math.abs(h); };
-const groupColor = (name) => name ? GROUP_PALETTE[hashStr(name) % GROUP_PALETTE.length] : "#B9C2CF";
-const colorFor = (path, colors) => path ? ((colors && colors[path]) || groupColor(path)) : "#B9C2CF";
-const FolderColorsContext = createContext({ colors: {}, setColor: () => {} });
-const leafName = (path) => (path || "").split("/").filter(Boolean).pop() || "";
-const ancestorsOf = (path) => {
+export const groupColor = (name) => name ? GROUP_PALETTE[hashStr(name) % GROUP_PALETTE.length] : "#B9C2CF";
+export const colorFor = (path, colors) => path ? ((colors && colors[path]) || groupColor(path)) : "#B9C2CF";
+export const FolderColorsContext = createContext({ colors: {}, setColor: () => {} });
+export const leafName = (path) => (path || "").split("/").filter(Boolean).pop() || "";
+export const ancestorsOf = (path) => {
   const parts = (path || "").split("/").filter(Boolean);
   const res = []; let acc = "";
   for (let i = 0; i < parts.length - 1; i++) { acc = acc ? acc + "/" + parts[i] : parts[i]; res.push(acc); }
   return res;
 };
-const buildTree = (paths) => {
+export const buildTree = (paths) => {
   const root = []; const map = {};
   [...paths].sort().forEach(p => {
     const parts = p.split("/").filter(Boolean);
@@ -203,18 +204,18 @@ const buildTree = (paths) => {
 // render". Call sites store the opposite (a small "collapsedPaths" set) so
 // that folders default to expanded without needing to seed every path —
 // this derives the expanded set each render.
-const expandedFromCollapsed = (allPaths, collapsedPaths) => new Set(allPaths.filter(p => !collapsedPaths.has(p)));
+export const expandedFromCollapsed = (allPaths, collapsedPaths) => new Set(allPaths.filter(p => !collapsedPaths.has(p)));
 
 function PosBadge({ pos }) {
   if (!pos) return null;
   return <span className="pos-badge" style={{ background: (POS_COLORS[pos] || POS_COLORS[""]) + "22", color: POS_COLORS[pos] || POS_COLORS[""] }}>{pos}</span>;
 }
-function GroupBadge({ group }) {
+export function GroupBadge({ group }) {
   const { colors } = useContext(FolderColorsContext);
   if (!group) return null;
   return <span className="group-badge" title={group}><span className="dot-sm" style={{ background: colorFor(group, colors) }} />{leafName(group)}</span>;
 }
-function SpeakerBtn({ text, size = 16 }) {
+export function SpeakerBtn({ text, size = 16 }) {
   return (
     <button className="speaker-btn" onClick={(e) => { e.stopPropagation(); speak(text); }} aria-label={`${text} 발음 듣기`}>
       <Volume2 size={size} strokeWidth={2.25} />
@@ -425,6 +426,7 @@ export default function VocabApp() {
         .tab-btn.active.t-quiz{background:var(--lavender-bg); border-color:var(--lavender); color:var(--lavender-ink);}
         .tab-btn.active.t-groups{background:var(--teal-bg); border-color:var(--teal); color:var(--teal-ink);}
         .tab-btn.active.t-colloc{background:var(--coral-bg); border-color:var(--coral); color:var(--coral-ink);}
+        .tab-btn.active.t-med{background:var(--teal-bg); border-color:var(--teal); color:var(--teal-ink);}
 
         .panel{max-width:640px; margin:0 auto; background:var(--card); border-radius:20px; padding:20px 18px; box-shadow:0 10px 26px rgba(80,100,140,0.10); min-height:320px; border:1.5px solid var(--line);}
 
@@ -619,6 +621,7 @@ export default function VocabApp() {
         <TabBtn cls="t-import" active={tab === "import"} onClick={() => setTab("import")} icon={<Type size={17} />} label="가져오기" />
         <TabBtn cls="t-colloc" active={tab === "colloc"} onClick={() => setTab("colloc")} icon={<Link2 size={17} />} label="연어" />
         <TabBtn cls="t-quiz" active={tab === "quiz"} onClick={() => setTab("quiz")} icon={<Layers size={17} />} label="퀴즈" />
+        <TabBtn cls="t-med" active={tab === "med"} onClick={() => setTab("med")} icon={<Stethoscope size={17} />} label="의학용어" />
       </div>
 
       <div className="panel">
@@ -633,8 +636,10 @@ export default function VocabApp() {
           <ImportTab addWords={addWords} showToast={showToast} goList={() => setTab("list")} groups={groups} groupCounts={groupCounts} activeGroup={activeGroup} setActiveGroup={setActiveGroup} addFolder={addFolder} />
         ) : tab === "colloc" ? (
           <CollocationTab words={words} groups={groups} />
-        ) : (
+        ) : tab === "quiz" ? (
           <QuizTab words={words} groups={groups} groupCounts={groupCounts} wrongCounts={wrongCounts} markAnswer={markAnswer} />
+        ) : (
+          <MedTermApp />
         )}
       </div>
 
@@ -644,7 +649,7 @@ export default function VocabApp() {
   );
 }
 
-function TabBtn({ active, onClick, icon, label, cls }) {
+export function TabBtn({ active, onClick, icon, label, cls }) {
   return (
     <button className={`tab-btn ${cls} ${active ? "active" : ""}`} onClick={onClick}>
       {icon}<span>{label}</span>
@@ -1083,7 +1088,7 @@ function CollocationTab({ words, groups }) {
   );
 }
 
-function GroupField({ value, onChange, groups }) {
+export function GroupField({ value, onChange, groups }) {
   return (
     <>
       <input list="group-options" value={value} onChange={e => onChange(e.target.value)} placeholder="묶음 이름 (예: Day 1)" />
@@ -1092,7 +1097,7 @@ function GroupField({ value, onChange, groups }) {
   );
 }
 
-function FolderTreeRows({ nodes, depth, expanded, toggleExpand, isSelected, onToggle, counts }) {
+export function FolderTreeRows({ nodes, depth, expanded, toggleExpand, isSelected, onToggle, counts }) {
   const { colors } = useContext(FolderColorsContext);
   return nodes.map(node => (
     <React.Fragment key={node.fullPath}>
@@ -1163,7 +1168,7 @@ function BulkMoveModal({ groups, counts, onCreateFolder, onConfirm, onClose }) {
   );
 }
 
-function GroupPicker({ groups, value, onChange, counts = {}, onCreateFolder }) {
+export function GroupPicker({ groups, value, onChange, counts = {}, onCreateFolder }) {
   const { colors } = useContext(FolderColorsContext);
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(value);
@@ -1505,7 +1510,7 @@ function ManageFolderRows({ nodes, depth, expanded, toggleExpand, counts, editin
   ));
 }
 
-function ManageGroupsTab({ groups, groupCounts, addFolder, renameFolder, deleteFolder, words, folderPaths, folderColors, wrongIds, wrongCounts, wrongDetails, onImport }) {
+export function ManageGroupsTab({ groups, groupCounts, addFolder, renameFolder, deleteFolder, words, folderPaths, folderColors, wrongIds, wrongCounts, wrongDetails, onImport }) {
   const [expanded, setExpanded] = useState(new Set());
   const toggleExpand = (p) => setExpanded(prev => { const s = new Set(prev); s.has(p) ? s.delete(p) : s.add(p); return s; });
   const [editingPath, setEditingPath] = useState(null);
